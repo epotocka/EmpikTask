@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: EmpikTask
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  mvc:
+    problemdetails:
+      enabled: true
+  http:
+    clients:
+      connect-timeout: 2s
+      read-timeout: 3s
+
+server:
+  forward-headers-strategy: framework
+
+coupons:
+  reservation:
+    ttl: 15m
+  geolocation:
+    base-url: http://ip-api.com
