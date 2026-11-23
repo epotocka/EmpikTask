@@ -243,6 +243,18 @@ In Redis score ranges, a leading `(` marks the bound as **exclusive**. It isn't 
 
 **Why it's always exact.** Expiry is evaluated at read time, by comparing scores with the current time. An expired reservation is never counted or treated as active, whether or not it has been physically removed yet. Removing expired members (`ZREMRANGEBYSCORE`) and the key-level TTL (`EXPIRE`) are only housekeeping. They keep memory bounded and delete the key of a coupon nobody reserves any more, but correctness never depends on them. Time comes from the application's clock, so application instances should be time-synchronized (NTP).
 
+**What sets or resets a reservation's timer.** Only one place writes a score: the `ZADD` in `ReservationStore.upsertUserReservation`, with `score = now + 15 min`. It runs only when the user has no active reservation in that coupon, which is re-checked under the coupon's row lock. So an active reservation's timer is never reset as a side effect:
+
+| Action | Effect on the user's score | Timer reset? |
+|---|---|---|
+| Retrying the same coupon while the reservation is active, including parallel retries | No `ZADD`: the existing reservation is returned with its original `expiresAt` | No |
+| Other users reserving the same coupon | Only the key-level TTL (`EXPIRE`) is refreshed. It never changes a member's score. | No |
+| Reserving again after the reservation expired | Expired members are removed, and the user is added as a new reservation | Yes, as a new reservation |
+| Switching to another coupon | The new coupon gets a fresh score, and the user's entry in the old coupon is removed. The time left on the old reservation isn't carried over. | Yes, on the new coupon |
+| Using the coupon | The entry is removed (`ZREM`) | — |
+
+Because every switch starts a fresh 15 minutes, a user who alternates between two coupons (A → B → A …) can keep holding one slot for longer than 15 minutes. Each switch frees the previous slot, so the user never holds more than one at a time. Switching back isn't guaranteed either: if someone else took the freed slot and the coupon is now full, the switch fails with `409 COUPON_TEMPORARILY_UNAVAILABLE`, and the user keeps their current reservation.
+
 #### Alternatives considered
 
 **1. A key per reservation with a normal TTL** (`reservation:{couponId}:{userId}`, `EX 900`). Question 1 becomes a simple `EXISTS`, but question 2 can't be answered properly:
